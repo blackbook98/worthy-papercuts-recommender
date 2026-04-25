@@ -54,7 +54,7 @@ The stack was chosen to reflect real-world trade-offs:
 ### AI Features
 
 - 🤖 **AI Book Recommendations** — personalized suggestions powered by a Python ML microservice using content-based filtering. A taste profile is built from your rated books: description keywords extracted via TF-IDF (higher-rated books contribute more), authors scored by peak rating with a small bonus for multiple reads, and genres weighted by cumulative rating. Candidate books from Google Books API are scored via TF-IDF cosine similarity against the profile (keywords weighted 4×, authors and genres 1× each). Each query contributes at most 4 candidates to keep the pool balanced. Recommendations are pre-computed and served instantly from the database
-- 💬 **AI Chatbot Agent** — powered by Google ADK and Gemini. Can search for books, add them to your lists, fetch your recommendations, and discuss literary topics conversationally
+- 💬 **AI Chatbot Agent** — powered by Google ADK and Gemini. Can search for books, add them to your lists, move or remove books across lists, and discuss literary topics conversationally
 
 ---
 
@@ -75,7 +75,7 @@ The stack was chosen to reflect real-world trade-offs:
 │                      NestJS Backend                      │      │
 │     Auth │ Lists │ Reviews │ Recommender │ Chatbot Agent │──────┘
 └──────┬────────────────────────────────────────┬──────────┘
-       │ HTTP (cron-triggered)                  │ TypeORM
+       │ HTTP (Cloud Scheduler)                 │ TypeORM
        │                               ┌────────▼────────┐
 ┌──────▼──────────────┐                │   PostgreSQL DB │
 │  Python Recommender │                │   (Neon.tech)   │
@@ -189,11 +189,11 @@ The NestJS backend exposes the following endpoints. All endpoints except auth re
 
 ### Lists
 
-| Method | Endpoint     | Description              |
-| ------ | ------------ | ------------------------ |
-| GET    | `/lists`     | Get user's reading lists |
-| POST   | `/saveLists` | Add a book to a list     |
-| DELETE | `/lists`     | Remove book from lists   |
+| Method | Endpoint             | Description                       |
+| ------ | -------------------- | --------------------------------- |
+| GET    | `/lists?userId=<id>` | Get user's reading lists          |
+| POST   | `/saveLists`         | Add or move a book in a list      |
+| DELETE | `/lists`             | Remove a book from a user's lists |
 
 ### Reviews
 
@@ -235,7 +235,7 @@ Each service lives in its own repository. Click the section headers to visit eac
 src/
 ├── auth/                 # JWT auth, guards, strategies
 ├── user/                 # User entity and service
-├── recommender/          # Cron job, recommendation storage
+├── recommender/          # Cron job, triggers recommendation computation
 ├── chatbot/              # ADK agent, tools for agent
 │   └── tools/
 │       ├── books.tool.ts
@@ -249,17 +249,17 @@ src/
 ```
 src/
 ├── Components/
-│   ├── About.js
-│   ├── ChatBot.js
-│   ├── Dashboard.js
-│   ├── Explore.js
-│   ├── LoginRegister.js
-│   ├── Logout.js
-│   └── ReviewModal.js
+│   ├── About.js              # Reviews and Ratings page
+│   ├── ChatBot.js            # AI Chatbot
+│   ├── Dashboard.js          # Search books and Add to Lists
+│   ├── Explore.js            # Content-Based Recommendations based on rated reading history
+│   ├── LoginRegister.js      # user Login/Registration
+│   ├── Logout.js             # Logout functionality
+│   └── ReviewModal.js        # User Review/rating functionality
 ├── helpers/
 │   └── helper_axios.js
-├── App.js
-└── index.js
+├── App.js                    # Main App file
+└── index.js                  # Entry file
 ```
 
 ### [Python Recommender](https://github.com/blackbook98/worthy-papercuts-recommender)
