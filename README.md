@@ -4,9 +4,9 @@ A full-stack book tracking and discovery platform with AI-powered recommendation
 
 ---
 
-## Live Demo
+## App Link
 
-> _Link to deployed app here_
+> https://worthy-papercuts.vercel.app
 
 ---
 
