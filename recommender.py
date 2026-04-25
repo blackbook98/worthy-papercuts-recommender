@@ -1,6 +1,7 @@
 import numpy as np
 from collections import Counter
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import httpx
 import os
 
@@ -13,7 +14,8 @@ class ContentBasedRecommender:
 
     def extract_taste_profile(self, finished_books: list[dict]) -> dict:
         genre_scores = Counter()
-        author_scores = Counter()
+        author_sum = Counter()
+        author_max: dict[str, float] = {}
         keywords = []
 
         for book in finished_books:
@@ -25,28 +27,45 @@ class ContentBasedRecommender:
                 genre_scores[clean] += weight
 
             for author in (book.get('authors') or []):
-                author_scores[author] += weight
+                author_sum[author] += weight
+                author_max[author] = max(author_max.get(author, 0.0), weight)
 
             description = book.get('description') or ''
-            if description and rating >= 4:
-                keywords.append(description)
+            if description and rating >= 3:
+                repeat = max(1, round(weight * 3))
+                keywords.extend([description] * repeat)
 
-        top_genres = [g for g, _ in genre_scores.most_common(3)]
-        top_authors = [a for a, _ in author_scores.most_common(3)]
+        # Score = peak quality + small bonus for additional reads
+        author_scores = {
+            a: author_max[a] + 0.5 * (author_sum[a] - author_max[a])
+            for a in author_sum
+        }
+        top_genres = [g for g, s in genre_scores.most_common(2) if s >= 1.0]
+        top_authors = sorted(
+            [a for a, s in author_scores.items() if s >= 0.8],
+            key=author_scores.get,
+            reverse=True
+        )[:3]
 
         top_keywords = []
+        scores = []
         if keywords:
             tfidf = TfidfVectorizer(
                 stop_words='english',
-                max_features=10,
+                max_features=20,
                 ngram_range=(1, 2)
             )
             try:
-                tfidf.fit_transform(keywords)
-                top_keywords = list(tfidf.get_feature_names_out())[:5]
+                matrix = tfidf.fit_transform(keywords)
+                scores = np.asarray(matrix.sum(axis=0)).flatten()
+                keywords = tfidf.get_feature_names_out()
+                top_indices = scores.argsort()[::-1][:20]
+                top_keywords = [keywords[i] for i in top_indices]
             except Exception:
                 pass
-
+        print('top_genres:', top_genres)
+        print('top_authors:', top_authors)
+        print('top_keywords:', top_keywords)
         return {
             'top_genres': top_genres,
             'top_authors': top_authors,
@@ -59,14 +78,16 @@ class ContentBasedRecommender:
         authors = profile['top_authors']
         keywords = profile['top_keywords']
 
-        for genre in genres[:2]:
-            queries.append(f'subject:{genre}')
+        if authors:
+            queries.append(f'inauthor:{authors[0]}')
 
-        for author in authors[:2]:
-            queries.append(f'inauthor:{author}')
+        if keywords:
+            queries.append(' '.join(keywords[:3]))
 
         if keywords and genres:
             queries.append(f'{keywords[0]} {genres[0]}')
+        elif genres:
+            queries.append(f'subject:{genres[0]}')
 
         if not queries:
             queries.append('bestseller fiction')
@@ -74,6 +95,7 @@ class ContentBasedRecommender:
         return queries
 
     async def search_google_books(self, query: str) -> list[dict]:
+        print(query)
         params = {
             'q': query,
             'maxResults': 10,
@@ -93,8 +115,13 @@ class ContentBasedRecommender:
             data = response.json()
 
         books = []
+        seen_titles = set()
         for item in data.get('items', []):
             info = item.get('volumeInfo', {})
+            title = info.get('title', '').lower().strip()
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
             books.append({
                 'googleBooksId': item['id'],
                 'title': info.get('title', 'Unknown'),
@@ -115,33 +142,39 @@ class ContentBasedRecommender:
         top_n: int = 10
     ) -> list[dict]:
 
-        # Step 1 — Build taste profile
+        # Build taste profile
         profile = self.extract_taste_profile(finished_books)
         queries = self.build_search_queries(profile)
-
-        # Step 2 — Search Google Books for each query
+        # Search Google Books for each query
         seen_ids = set(already_have_ids)
+        seen_titles = set()
         candidates = {}
 
         for query in queries:
             try:
                 results = await self.search_google_books(query)
+                added = 0
                 for book in results:
+                    if added >= 4:
+                        break
                     gid = book['googleBooksId']
-                    if gid not in seen_ids and gid not in candidates:
+                    title = book['title'].lower().strip()
+                    if gid not in seen_ids and gid not in candidates and title not in seen_titles:
                         candidates[gid] = book
+                        seen_titles.add(title)
+                        added += 1
             except Exception as e:
                 print(f'Google Books query failed for "{query}": {e}')
                 continue
 
-        # Step 3 — Score candidates against user profile
+        # Score candidates against user profile
         if not candidates:
             return []
 
         candidate_list = list(candidates.values())
         scores = self._score_candidates(candidate_list, profile)
 
-        # Step 4 — Sort by score and return top N
+        # Sort by score and return top N
         scored = sorted(
             zip(candidate_list, scores),
             key=lambda x: x[1],
@@ -161,35 +194,31 @@ class ContentBasedRecommender:
         candidates: list[dict],
         profile: dict
     ) -> list[float]:
-        """Score each candidate book against the user's taste profile."""
-        scores = []
+        # Repeat genres/authors to upweight them in the TF-IDF space
+        profile_doc = ' '.join(
+            profile['top_keywords'] * 4 +
+            profile['top_authors'] * 1 +
+            profile['top_genres'] * 1
+        )
+        if not profile_doc.strip():
+            return [0.0] * len(candidates)
 
-        for book in candidates:
-            score = 0.0
+        candidate_docs = [
+            ' '.join(filter(None, [
+                book.get('description') or '',
+                ' '.join(book.get('categories') or []),
+                ' '.join(book.get('authors') or []),
+            ]))
+            for book in candidates
+        ]
 
-            # Genre match
-            book_categories = {
-                c.split('/')[-1].strip().lower()
-                for c in (book.get('categories') or [])
-            }
-            for genre in profile['top_genres']:
-                if genre.lower() in book_categories:
-                    score += 1.5  # Genre match weighted highest
-
-            # Author match
-            book_authors = {a.lower() for a in (book.get('authors') or [])}
-            for author in profile['top_authors']:
-                if author.lower() in book_authors:
-                    score += 0.3  # Author match weighted higher
-
-            # Keyword match in description
-            description = (book.get('description') or '').lower()
-            for keyword in profile['top_keywords']:
-                if keyword.lower() in description:
-                    score += 1.0 # Keyword match weighted higher
-            scores.append(score)
-
-        return scores
+        try:
+            tfidf = TfidfVectorizer(stop_words='english', ngram_range=(1, 2))
+            matrix = tfidf.fit_transform([profile_doc] + candidate_docs)
+            sims = cosine_similarity(matrix[0], matrix[1:]).flatten()
+            return sims.tolist()
+        except Exception:
+            return [0.0] * len(candidates)
 
     def _generate_reason(self, book: dict, profile: dict) -> str:
         book_categories = {
