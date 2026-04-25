@@ -39,6 +39,8 @@ The stack was chosen to reflect real-world trade-offs:
 
 ---
 
+> ⚠️ Services may take 3–5 seconds to respond on first load due to Cloud Run's scale-to-zero behaviour.
+
 ## Features
 
 ### Core
