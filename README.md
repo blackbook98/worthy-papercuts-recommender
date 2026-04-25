@@ -88,7 +88,7 @@ The stack was chosen to reflect real-world trade-offs:
 ### Request Flow — Recommendations
 
 ```
-Scheduled job (every 12 hours)
+Scheduled job
         │
         ▼
 Backend (NestJS) fetches user's finished books + ratings from DB
@@ -97,16 +97,7 @@ Backend (NestJS) fetches user's finished books + ratings from DB
 POST to Python /recommend
         │
         ▼
-Python extracts taste profile:
-  - Keywords: TF-IDF over descriptions, higher-rated books repeated more
-  - Authors: peak rating + 0.5× bonus per additional read (threshold ≥ 0.8)
-  - Genres: cumulative rating weight (threshold ≥ 1.0)
-Builds search queries → hits Google Books API (max 4 results per query):
-  - Top author → inauthor: query
-  - Top keywords → free-text query
-  - Keywords + genre → blended query (or subject: fallback)
-Scores all candidates via TF-IDF cosine similarity
-  (keywords ×4, authors ×1, genres ×1 in profile vector)
+Python extracts taste profile
         │
         ▼
 Returns top 10 books → Backend saves to recommendations table
@@ -125,9 +116,9 @@ POST /chatbot/message → NestJS ChatbotService
         │
         ▼
 Google ADK Agent (Gemini 2.5 Flash)
-  → calls search_books tool (Google Books API)
-  → confirms book with user
-  → calls add_book_to_list tool (directly hits ListsService)
+        │
+        ▼
+Chats with User about the book, If user asks to add books to list
         │
         ▼
 "Done! I've added Dune by Frank Herbert to your To Read list."
